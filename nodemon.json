@@ -1,0 +1,5 @@
+{
+  "ext": "ts,js",
+  "exec": "ts-node src/app.ts",
+  "ignore": ["dist/*", "node_modules/*"]
+}

@@ -1,0 +1,30 @@
+{
+  "name": "personal-blogging-api",
+  "version": "1.0.0",
+  "description": "Persnal Blogging API (CRUD)",
+  "main": "app.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/SirPm/personal-blogging-api.git"
+  },
+  "author": "Oluwapelumi Odumosu",
+  "license": "MIT",
+  "scripts": {
+    "build": "npx tsc",
+    "start": "node dist/app.js",
+    "dev": "nodemon",
+    "watch": "tsc --watch"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.12.12",
+    "nodemon": "^3.1.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.4.5"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "mysql2": "^3.9.7",
+    "sequelize": "^6.37.3"
+  }
+}
