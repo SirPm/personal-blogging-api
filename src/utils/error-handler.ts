@@ -7,13 +7,16 @@ export const errorHandler: ErrorRequestHandler = (
   res: Response,
   next: NextFunction
 ) => {
-  res.status(error?.statusCode || 500).json({
+  const statusCode = error?.statusCode || 500;
+  res.status(statusCode).json({
     message: error.message || "Internal server error",
+    code: statusCode,
   });
 };
 
 export const notFoundErrorHandler = (req: Request, res: Response) => {
   res.status(404).json({
     message: "Route does not exist!",
+    code: 404,
   });
 };

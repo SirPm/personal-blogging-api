@@ -1,14 +1,33 @@
-import mysql2, { Pool } from "mysql2/promise";
+import mysql2, { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { Request, Response, NextFunction } from "express";
+import { validationResult } from "express-validator";
+import { ApiError } from "../types/error";
+
+interface Tag extends RowDataPacket {
+  id: number;
+  tag: string;
+}
 
 export const getArticles = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  const connectionPool: Pool = req.app.locals.connectionPool;
+  const pool: Pool = req.app.locals.pool;
+  const [validationErr] = validationResult(req)
+    .formatWith((err) => err.msg as string)
+    .array({ onlyFirstError: true });
+
+  if (validationErr) {
+    const err: ApiError = new Error(validationErr);
+    err.statusCode = 422;
+    return next(err);
+  }
+
+  const tags = req.query.tags;
+
   try {
-    const [articles] = await connectionPool.execute(`SELECT * FROM Articles`);
+    const [articles] = await pool.execute(`SELECT * FROM Articles`);
     res.status(200).json({
       message: "Fetched successfully!",
       articles,
@@ -18,32 +37,156 @@ export const getArticles = async (
   }
 };
 
+const createTables = async (pool: Pool, next: NextFunction) => {
+  const connection = await pool.getConnection();
+  try {
+    const createArticlesTableSQL = `
+      CREATE TABLE IF NOT EXISTS Articles (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        content VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+      )
+    `;
+    const createTagsTableSQL = `
+      CREATE TABLE IF NOT EXISTS Tags (
+        id INT PRIMARY KEY AUTO_INCREMENT,
+        tag VARCHAR(255) NOT NULL UNIQUE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `;
+    const createJunctionArticlesTagsTableSQL = `
+      CREATE TABLE IF NOT EXISTS Articles_Tags (
+        PRIMARY KEY (article_id, tag_id),
+        article_id INT NOT NULL,
+        tag_id INT NOT NULL,
+        FOREIGN KEY (article_id) REFERENCES articles(id),
+        FOREIGN KEY (tag_id) REFERENCES tags(id)
+      )
+    `;
+
+    await connection.execute(createArticlesTableSQL);
+    await connection.execute(createTagsTableSQL);
+    await connection.execute(createJunctionArticlesTagsTableSQL);
+  } catch (error) {
+    next(error);
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
+const getExistingTags = async (
+  pool: Pool,
+  tags: string[],
+  next: NextFunction
+): Promise<{
+  oldTagIds: number[];
+  oldTagNames: string[];
+}> => {
+  const connection = await pool.getConnection();
+  try {
+    const promises = tags.map(async (tagName) => {
+      const [tagRows] = await connection.execute<Tag[]>(
+        `SELECT id, tag FROM Tags WHERE tag = "${tagName}"`
+      );
+      return tagRows;
+    });
+    const results = await Promise.all(promises);
+    const oldTagIds: number[] = [];
+    const oldTagNames: string[] = [];
+
+    for (let i = 0; i < results.length; i++) {
+      const currentTagRows = results[i];
+      if (currentTagRows.length > 0) {
+        const [{ id, tag }] = currentTagRows;
+        oldTagIds.push(id);
+        oldTagNames.push(tag);
+      }
+    }
+
+    return {
+      oldTagIds,
+      oldTagNames,
+    };
+  } catch (error) {
+    next(error);
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
 export const createNewArticle = async (
   req: Request,
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  const connectionPool: Pool = req.app.locals.connectionPool;
-  const article = req.body.article;
-  const createTableSQL = `
-    CREATE TABLE IF NOT EXISTS Articles (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        content VARCHAR(255) NOT NULL,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-    )
-  `;
+  const pool: Pool = req.app.locals.pool;
+  const connection = await pool.getConnection();
+  const [validationErr] = validationResult(req)
+    .formatWith((err) => err.msg as string)
+    .array({ onlyFirstError: true });
+
+  if (validationErr) {
+    const err: ApiError = new Error(validationErr);
+    err.statusCode = 422;
+    return next(err);
+  }
+
+  const article: string = req.body.article;
+  const tags: string[] = req.body.tags
+    .split(",")
+    .map((tag: string) => tag.trim());
 
   try {
-    await connectionPool.execute(createTableSQL);
-    const insertSQL = `INSERT INTO Articles (content) VALUES(?)`;
-    const insertValue = [article];
-    await connectionPool.execute(insertSQL, insertValue);
+    await createTables(pool, next);
+    await connection.beginTransaction();
+
+    const insertArticleSQL = `INSERT INTO Articles (content) VALUES(?)`;
+    const [newArticleRow] = await connection.execute<ResultSetHeader>(
+      insertArticleSQL,
+      [article]
+    );
+    const articleId = newArticleRow.insertId;
+
+    const { oldTagIds, oldTagNames } = await getExistingTags(pool, tags, next);
+    const newTags = tags.filter((tag) => !oldTagNames.includes(tag));
+    let newTagIds: number[] = [];
+    if (newTags.length > 0) {
+      const tagsPlaceholder = newTags.map((_) => "(?)").join(", ");
+      const insertTagSQL = `INSERT INTO Tags (tag) VALUES ${tagsPlaceholder}`;
+      const [newTagsRow] = await connection.execute<ResultSetHeader>(
+        insertTagSQL,
+        newTags
+      );
+      const firstTagId = newTagsRow.insertId;
+      newTagIds = Array.from(
+        { length: newTags.length },
+        (_, index) => firstTagId + index
+      );
+    }
+
+    const articleTags = [...oldTagIds, ...newTagIds].map((tagId) => [
+      articleId,
+      tagId,
+    ]);
+    const articlesTagsPlaceholder = tags.map((_) => "(?, ?)").join(", ");
+    const insertArticleTagSQL = `INSERT INTO Articles_Tags (article_id, tag_id) VALUES ${articlesTagsPlaceholder}`;
+
+    await connection.execute(insertArticleTagSQL, articleTags.flat());
+    await connection.commit();
     res.status(201).json({
       message: "Article created successfully!",
-      article,
+      data: {
+        article,
+        tags,
+      },
     });
   } catch (error) {
+    await connection.rollback();
     next(error);
+  } finally {
+    connection.release();
   }
 };
