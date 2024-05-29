@@ -5,8 +5,19 @@ import { ApiError } from "../types/error";
 import { ArticleRow, Tag, Article } from "../types/articles";
 
 interface TagRecord extends RowDataPacket, Tag {}
-
 interface ArticleRecord extends RowDataPacket, ArticleRow {}
+
+const filterArticlesByTags = (tags: string, articles: Article[]): Article[] => {
+  const filterTagSet = new Set(tags.split(",").map((tag) => tag.trim()));
+  return articles.filter((article) => {
+    for (const tag of article.tags) {
+      if (filterTagSet.has(tag.tag)) {
+        return true;
+      }
+    }
+    return false;
+  });
+};
 
 export const getArticles = async (
   req: Request,
@@ -24,7 +35,7 @@ export const getArticles = async (
     return next(err);
   }
 
-  const tags = req.query.tags;
+  const tags = req.query.tags as string | undefined;
 
   try {
     const selectArticlesWithTagsSQL = `SELECT articles.*, tags.id AS tag_id, tags.tag FROM articles LEFT JOIN articles_tags ON articles.id = articles_tags.article_id LEFT JOIN tags ON articles_tags.tag_id = tags.id`;
@@ -55,7 +66,11 @@ export const getArticles = async (
       }
     }
 
-    const articles = Array.from(uniqueArticles.values());
+    let articles: Article[] = Array.from(uniqueArticles.values());
+    if (tags) {
+      articles = filterArticlesByTags(tags, articles);
+    }
+
     res.status(200).json({
       message: "Fetched successfully!",
       articles,
