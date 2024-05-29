@@ -19,6 +19,32 @@ const filterArticlesByTags = (tags: string, articles: Article[]): Article[] => {
   });
 };
 
+const groupArticlesByTags = (articleRecords: ArticleRecord[]): Article[] => {
+  const uniqueArticles: Map<number, Article> = new Map();
+  for (const article of articleRecords) {
+    const { id, content, created_at, updated_at, tag_id, tag } = article;
+    if (!uniqueArticles.has(id)) {
+      uniqueArticles.set(id, {
+        id,
+        content,
+        created_at,
+        updated_at,
+        tags: [],
+      });
+    }
+
+    const uniqueArticle = uniqueArticles.get(id);
+    if (uniqueArticle) {
+      const tags = uniqueArticle.tags;
+      tags.push({
+        id: tag_id,
+        tag,
+      });
+    }
+  }
+  return Array.from(uniqueArticles.values());
+};
+
 export const getArticles = async (
   req: Request,
   res: Response,
@@ -39,34 +65,11 @@ export const getArticles = async (
 
   try {
     const selectArticlesWithTagsSQL = `SELECT articles.*, tags.id AS tag_id, tags.tag FROM articles LEFT JOIN articles_tags ON articles.id = articles_tags.article_id LEFT JOIN tags ON articles_tags.tag_id = tags.id`;
-    const [articlesRows] = await pool.execute<ArticleRecord[]>(
+    const [articleRecords] = await pool.execute<ArticleRecord[]>(
       selectArticlesWithTagsSQL
     );
 
-    const uniqueArticles: Map<number, Article> = new Map();
-    for (const article of articlesRows) {
-      const { id, content, created_at, updated_at, tag_id, tag } = article;
-      if (!uniqueArticles.has(id)) {
-        uniqueArticles.set(id, {
-          id,
-          content,
-          created_at,
-          updated_at,
-          tags: [],
-        });
-      }
-
-      const uniqueArticle = uniqueArticles.get(id);
-      if (uniqueArticle) {
-        const tags = uniqueArticle.tags;
-        tags.push({
-          id: tag_id,
-          tag,
-        });
-      }
-    }
-
-    let articles: Article[] = Array.from(uniqueArticles.values());
+    let articles: Article[] = groupArticlesByTags(articleRecords);
     if (tags) {
       articles = filterArticlesByTags(tags, articles);
     }
@@ -74,6 +77,38 @@ export const getArticles = async (
     res.status(200).json({
       message: "Fetched successfully!",
       articles,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const getArticle = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const pool: Pool = req.app.locals.pool;
+  const articleId = req.params.articleId;
+
+  try {
+    const connection = await pool.getConnection();
+    const selectSingleArticleSQL = `SELECT articles.*, tags.id AS tag_id, tags.tag FROM articles LEFT JOIN articles_tags ON articles.id = articles_tags.article_id LEFT JOIN tags ON articles_tags.tag_id = tags.id WHERE articles.id = ${articleId}`;
+
+    const [articleRecord] = await connection.execute<ArticleRecord[]>(
+      selectSingleArticleSQL
+    );
+
+    let message = `No article with id: ${articleId} found!`;
+    let article: Article | null = null;
+    if (articleRecord.length > 0) {
+      article = groupArticlesByTags(articleRecord)[0];
+      message = "Fetched article successfully!";
+    }
+
+    res.status(200).json({
+      message,
+      article,
     });
   } catch (error) {
     next(error);

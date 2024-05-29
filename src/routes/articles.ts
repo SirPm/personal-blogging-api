@@ -1,6 +1,10 @@
 import { Router } from "express";
 import { body, query } from "express-validator";
-import { createNewArticle, getArticles } from "../controllers/articles";
+import {
+  createNewArticle,
+  getArticles,
+  getArticle,
+} from "../controllers/articles";
 
 const articlesRouter = Router();
 
@@ -14,6 +18,8 @@ articlesRouter.get(
   ],
   getArticles
 );
+
+articlesRouter.get("/single/:articleId", getArticle);
 
 articlesRouter.post(
   "/create",
