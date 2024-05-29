@@ -2,11 +2,11 @@ import mysql2, { Pool, ResultSetHeader, RowDataPacket } from "mysql2/promise";
 import { Request, Response, NextFunction } from "express";
 import { validationResult } from "express-validator";
 import { ApiError } from "../types/error";
+import { ArticleRow, Tag, Article } from "../types/articles";
 
-interface Tag extends RowDataPacket {
-  id: number;
-  tag: string;
-}
+interface TagRecord extends RowDataPacket, Tag {}
+
+interface ArticleRecord extends RowDataPacket, ArticleRow {}
 
 export const getArticles = async (
   req: Request,
@@ -27,7 +27,35 @@ export const getArticles = async (
   const tags = req.query.tags;
 
   try {
-    const [articles] = await pool.execute(`SELECT * FROM Articles`);
+    const selectArticlesWithTagsSQL = `SELECT articles.*, tags.id AS tag_id, tags.tag FROM articles LEFT JOIN articles_tags ON articles.id = articles_tags.article_id LEFT JOIN tags ON articles_tags.tag_id = tags.id`;
+    const [articlesRows] = await pool.execute<ArticleRecord[]>(
+      selectArticlesWithTagsSQL
+    );
+
+    const uniqueArticles: Map<number, Article> = new Map();
+    for (const article of articlesRows) {
+      const { id, content, created_at, updated_at, tag_id, tag } = article;
+      if (!uniqueArticles.has(id)) {
+        uniqueArticles.set(id, {
+          id,
+          content,
+          created_at,
+          updated_at,
+          tags: [],
+        });
+      }
+
+      const uniqueArticle = uniqueArticles.get(id);
+      if (uniqueArticle) {
+        const tags = uniqueArticle.tags;
+        tags.push({
+          id: tag_id,
+          tag,
+        });
+      }
+    }
+
+    const articles = Array.from(uniqueArticles.values());
     res.status(200).json({
       message: "Fetched successfully!",
       articles,
@@ -41,7 +69,7 @@ const createTables = async (pool: Pool, next: NextFunction) => {
   const connection = await pool.getConnection();
   try {
     const createArticlesTableSQL = `
-      CREATE TABLE IF NOT EXISTS Articles (
+      CREATE TABLE IF NOT EXISTS articles (
         id INT AUTO_INCREMENT PRIMARY KEY,
         content VARCHAR(255) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -49,14 +77,14 @@ const createTables = async (pool: Pool, next: NextFunction) => {
       )
     `;
     const createTagsTableSQL = `
-      CREATE TABLE IF NOT EXISTS Tags (
+      CREATE TABLE IF NOT EXISTS tags (
         id INT PRIMARY KEY AUTO_INCREMENT,
         tag VARCHAR(255) NOT NULL UNIQUE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       )
     `;
     const createJunctionArticlesTagsTableSQL = `
-      CREATE TABLE IF NOT EXISTS Articles_Tags (
+      CREATE TABLE IF NOT EXISTS articles_tags (
         PRIMARY KEY (article_id, tag_id),
         article_id INT NOT NULL,
         tag_id INT NOT NULL,
@@ -87,8 +115,8 @@ const getExistingTags = async (
   const connection = await pool.getConnection();
   try {
     const promises = tags.map(async (tagName) => {
-      const [tagRows] = await connection.execute<Tag[]>(
-        `SELECT id, tag FROM Tags WHERE tag = "${tagName}"`
+      const [tagRows] = await connection.execute<TagRecord[]>(
+        `SELECT id, tag FROM tags WHERE tag = "${tagName}"`
       );
       return tagRows;
     });
@@ -143,7 +171,7 @@ export const createNewArticle = async (
     await createTables(pool, next);
     await connection.beginTransaction();
 
-    const insertArticleSQL = `INSERT INTO Articles (content) VALUES(?)`;
+    const insertArticleSQL = `INSERT INTO articles (content) VALUES(?)`;
     const [newArticleRow] = await connection.execute<ResultSetHeader>(
       insertArticleSQL,
       [article]
@@ -155,7 +183,7 @@ export const createNewArticle = async (
     let newTagIds: number[] = [];
     if (newTags.length > 0) {
       const tagsPlaceholder = newTags.map((_) => "(?)").join(", ");
-      const insertTagSQL = `INSERT INTO Tags (tag) VALUES ${tagsPlaceholder}`;
+      const insertTagSQL = `INSERT INTO tags (tag) VALUES ${tagsPlaceholder}`;
       const [newTagsRow] = await connection.execute<ResultSetHeader>(
         insertTagSQL,
         newTags
@@ -172,7 +200,7 @@ export const createNewArticle = async (
       tagId,
     ]);
     const articlesTagsPlaceholder = tags.map((_) => "(?, ?)").join(", ");
-    const insertArticleTagSQL = `INSERT INTO Articles_Tags (article_id, tag_id) VALUES ${articlesTagsPlaceholder}`;
+    const insertArticleTagSQL = `INSERT INTO articles_tags (article_id, tag_id) VALUES ${articlesTagsPlaceholder}`;
 
     await connection.execute(insertArticleTagSQL, articleTags.flat());
     await connection.commit();
