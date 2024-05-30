@@ -1,6 +1,6 @@
 export interface ArticleRow {
   id: number;
-  content: string;
+  article: string;
   created_at: string;
   updated_at: string;
   tag_id: number;
@@ -14,7 +14,7 @@ export interface Tag {
 
 export interface Article {
   id: number;
-  content: string;
+  article: string;
   created_at: string;
   updated_at: string;
   tags: Tag[];

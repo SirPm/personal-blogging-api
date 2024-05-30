@@ -4,6 +4,7 @@ import {
   createNewArticle,
   getArticles,
   getArticle,
+  updateArticle,
 } from "../controllers/articles";
 
 const articlesRouter = Router();
@@ -20,6 +21,25 @@ articlesRouter.get(
 );
 
 articlesRouter.get("/single/:articleId", getArticle);
+
+articlesRouter.put(
+  "/single/update/:articleId",
+  [
+    body("article")
+      .trim()
+      .exists()
+      .notEmpty()
+      .withMessage(
+        "No article to update! Enter the new article to update with!"
+      ),
+    // body("tags")
+    //   .optional()
+    //   .trim()
+    //   .notEmpty()
+    //   .withMessage("Tags cannot be empty"),
+  ],
+  updateArticle
+);
 
 articlesRouter.post(
   "/create",

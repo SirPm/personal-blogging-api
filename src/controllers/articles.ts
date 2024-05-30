@@ -3,6 +3,7 @@ import { Request, Response, NextFunction } from "express";
 import { validationResult } from "express-validator";
 import { ApiError } from "../types/error";
 import { ArticleRow, Tag, Article } from "../types/articles";
+import { getValidationResult } from "../utils/get-validation-error";
 
 interface TagRecord extends RowDataPacket, Tag {}
 interface ArticleRecord extends RowDataPacket, ArticleRow {}
@@ -21,12 +22,12 @@ const filterArticlesByTags = (tags: string, articles: Article[]): Article[] => {
 
 const groupArticlesByTags = (articleRecords: ArticleRecord[]): Article[] => {
   const uniqueArticles: Map<number, Article> = new Map();
-  for (const article of articleRecords) {
-    const { id, content, created_at, updated_at, tag_id, tag } = article;
+  for (const articleRecord of articleRecords) {
+    const { id, article, created_at, updated_at, tag_id, tag } = articleRecord;
     if (!uniqueArticles.has(id)) {
       uniqueArticles.set(id, {
         id,
-        content,
+        article,
         created_at,
         updated_at,
         tags: [],
@@ -51,10 +52,7 @@ export const getArticles = async (
   next: NextFunction
 ): Promise<void> => {
   const pool: Pool = req.app.locals.pool;
-  const [validationErr] = validationResult(req)
-    .formatWith((err) => err.msg as string)
-    .array({ onlyFirstError: true });
-
+  const validationErr = getValidationResult(req);
   if (validationErr) {
     const err: ApiError = new Error(validationErr);
     err.statusCode = 422;
@@ -83,6 +81,31 @@ export const getArticles = async (
   }
 };
 
+const queryDbToGetArticle = async (
+  pool: Pool,
+  articleId: string
+): Promise<{
+  article: Article | null;
+  message: string;
+}> => {
+  const selectSingleArticleSQL = `SELECT articles.*, tags.id AS tag_id, tags.tag FROM articles LEFT JOIN articles_tags ON articles.id = articles_tags.article_id LEFT JOIN tags ON articles_tags.tag_id = tags.id WHERE articles.id = ${articleId}`;
+
+  const [articleRecord] = await pool.execute<ArticleRecord[]>(
+    selectSingleArticleSQL
+  );
+
+  let message = `No article with id: ${articleId} found!`;
+  let article: Article | null = null;
+  if (articleRecord.length > 0) {
+    article = groupArticlesByTags(articleRecord)[0];
+    message = "Fetched article successfully!";
+  }
+  return {
+    article,
+    message,
+  };
+};
+
 export const getArticle = async (
   req: Request,
   res: Response,
@@ -90,22 +113,8 @@ export const getArticle = async (
 ): Promise<void> => {
   const pool: Pool = req.app.locals.pool;
   const articleId = req.params.articleId;
-
   try {
-    const connection = await pool.getConnection();
-    const selectSingleArticleSQL = `SELECT articles.*, tags.id AS tag_id, tags.tag FROM articles LEFT JOIN articles_tags ON articles.id = articles_tags.article_id LEFT JOIN tags ON articles_tags.tag_id = tags.id WHERE articles.id = ${articleId}`;
-
-    const [articleRecord] = await connection.execute<ArticleRecord[]>(
-      selectSingleArticleSQL
-    );
-
-    let message = `No article with id: ${articleId} found!`;
-    let article: Article | null = null;
-    if (articleRecord.length > 0) {
-      article = groupArticlesByTags(articleRecord)[0];
-      message = "Fetched article successfully!";
-    }
-
+    const { message, article } = await queryDbToGetArticle(pool, articleId);
     res.status(200).json({
       message,
       article,
@@ -121,7 +130,7 @@ const createTables = async (pool: Pool, next: NextFunction) => {
     const createArticlesTableSQL = `
       CREATE TABLE IF NOT EXISTS articles (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        content VARCHAR(255) NOT NULL,
+        article VARCHAR(255) NOT NULL,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
       )
@@ -200,18 +209,15 @@ export const createNewArticle = async (
   res: Response,
   next: NextFunction
 ): Promise<void> => {
-  const pool: Pool = req.app.locals.pool;
-  const connection = await pool.getConnection();
-  const [validationErr] = validationResult(req)
-    .formatWith((err) => err.msg as string)
-    .array({ onlyFirstError: true });
-
+  const validationErr = getValidationResult(req);
   if (validationErr) {
     const err: ApiError = new Error(validationErr);
     err.statusCode = 422;
     return next(err);
   }
 
+  const pool: Pool = req.app.locals.pool;
+  const connection = await pool.getConnection();
   const article: string = req.body.article;
   const tags: string[] = req.body.tags
     .split(",")
@@ -221,7 +227,7 @@ export const createNewArticle = async (
     await createTables(pool, next);
     await connection.beginTransaction();
 
-    const insertArticleSQL = `INSERT INTO articles (content) VALUES(?)`;
+    const insertArticleSQL = `INSERT INTO articles (article) VALUES(?)`;
     const [newArticleRow] = await connection.execute<ResultSetHeader>(
       insertArticleSQL,
       [article]
@@ -266,5 +272,61 @@ export const createNewArticle = async (
     next(error);
   } finally {
     connection.release();
+  }
+};
+
+export const updateArticle = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const validationErr = getValidationResult(req);
+  if (validationErr) {
+    const err: ApiError = new Error(validationErr);
+    err.statusCode = 422;
+    return next(err);
+  }
+
+  const pool: Pool = req.app.locals.pool;
+  const articleId = req.params.articleId;
+  const newArticle = req.body.article;
+  const updateArticleSQL = `UPDATE articles SET article = ? WHERE id = ?`;
+
+  /* 
+    For now updating tags is beyond the scope of this mini project
+    I could come back later and extend it to:
+    (a) Add a new tag to an existing article.
+    (b) Remove a tag from an article.
+  */
+  // const tags: string | undefined = req.body.tags;
+  // let newTags: string[] = [];
+  // if (tags) {
+  //   const tagsList = tags.split(",").map((tag) => tag.trim());
+  //   newTags = tagsList;
+  // }
+
+  try {
+    const [{ affectedRows }] = await pool.execute<ResultSetHeader>(
+      updateArticleSQL,
+      [newArticle, articleId]
+    );
+
+    let message = "Article update failed! Article doesn't exist!";
+    let article: Article | null = null;
+    if (affectedRows > 0) {
+      const { article: updatedArticle } = await queryDbToGetArticle(
+        pool,
+        articleId
+      );
+      message = "Article updated successfully";
+      article = updatedArticle;
+    }
+
+    res.status(200).json({
+      message,
+      article,
+    });
+  } catch (error) {
+    next(error);
   }
 };
