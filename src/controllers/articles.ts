@@ -330,3 +330,31 @@ export const updateArticle = async (
     next(error);
   }
 };
+
+export const deleteArticle = async (
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> => {
+  const pool: Pool = req.app.locals.pool;
+  const articleId = req.params.articleId;
+  const deleteArticleSQL = `DELETE FROM articles WHERE id = ?`;
+
+  try {
+    const [{ affectedRows }] = await pool.execute<ResultSetHeader>(
+      deleteArticleSQL,
+      [articleId]
+    );
+
+    let message = `Delete article failed! No article with id: ${articleId} exists!`;
+    if (affectedRows > 0) {
+      message = "Article deleted successfully!";
+    }
+
+    res.status(200).json({
+      message,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
