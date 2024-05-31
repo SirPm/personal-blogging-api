@@ -1,6 +1,6 @@
 # This is a RESTful API called personal-blogging-api
 
-It basically does the following CRUD operations:
+Built with **NodeJS and MySQL**, it basically does the following CRUD operations:
 
 - Allows you to get a list of articles, and also filter them with their tags.
 - Returns a single article.
